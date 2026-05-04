@@ -5,6 +5,7 @@ from .gated_anneal import GatedAnnealTrainer
 from .top_k import TopKTrainer
 from .jumprelu import JumpReluTrainer
 from .batch_top_k import BatchTopKTrainer, BatchTopKSAE
+from .idol import LinearIDOLTrainer
 
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "JumpReluTrainer",
     "BatchTopKTrainer",
     "BatchTopKSAE",
+    "LinearIDOLTrainer",
 ]
