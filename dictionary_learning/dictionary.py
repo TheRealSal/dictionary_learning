@@ -436,3 +436,163 @@ class AutoEncoderNew(Dictionary, nn.Module):
         if device is not None:
             autoencoder.to(device)
         return autoencoder
+
+
+class LinearIDOL(Dictionary, nn.Module):
+    """
+    Linear IDOL (Independent Dynamics Of Latents) - a temporal-instantaneous SAE.
+
+    Learns latent dynamics with optional temporal (lagged) and instantaneous causal structure.
+
+    mode:
+        'temporal'      -- only lagged transition matrices B_1, ..., B_tau.
+        'instantaneous' -- only instantaneous mixing matrix M.
+        'both'          -- temporal + instantaneous (default).
+
+    encode/decode operate on single-step activations [batch, activation_dim].
+    forward expects windowed sequences [batch, activation_dim, tau+1] and
+    returns six scalar loss terms used for training.
+    """
+
+    VALID_MODES = ('temporal', 'instantaneous', 'both')
+
+    def __init__(
+        self,
+        activation_dim: int,
+        dict_size: int,
+        tau: int = 20,
+        w: float = 0.5,
+        noise_mode: str = 'lap',
+        topk_sparsity: int = 0,
+        mode: str = 'both',
+    ):
+        super().__init__()
+
+        if mode not in self.VALID_MODES:
+            raise ValueError(f"mode must be one of {self.VALID_MODES}, got {mode!r}.")
+
+        self.activation_dim = activation_dim
+        self.dict_size = dict_size
+        self.tau = tau
+        self.w = w
+        self.noise_mode = noise_mode
+        self.topk_sparsity = topk_sparsity
+        self.mode = mode
+
+        self.F_enc = nn.Parameter(t.ones(activation_dim, dict_size), requires_grad=True)
+        self.F_dec = nn.Parameter(t.ones(dict_size, activation_dim), requires_grad=True)
+
+        # Always allocated for state-dict compatibility; gradient disabled when unused.
+        self.Bs = nn.ParameterList([
+            nn.Parameter(t.zeros(dict_size, dict_size), requires_grad=self._uses_temporal())
+            for _ in range(tau)
+        ])
+
+        self.M = nn.Parameter(
+            t.ones(dict_size, dict_size),
+            requires_grad=self._uses_instantaneous(),
+        )
+
+        self._init_params()
+
+    def _uses_temporal(self) -> bool:
+        return self.mode in ('temporal', 'both')
+
+    def _uses_instantaneous(self) -> bool:
+        return self.mode in ('instantaneous', 'both')
+
+    def _init_params(self):
+        init.xavier_normal_(self.F_enc.data)
+        init.xavier_normal_(self.F_dec.data)
+        if self._uses_instantaneous():
+            init.xavier_normal_(self.M.data)
+
+    def encode(self, x: t.Tensor) -> t.Tensor:
+        """x: [batch, activation_dim] -> [batch, dict_size]."""
+        return t.einsum('hd,bd->bh', self.F_enc, x)
+
+    def decode(self, f: t.Tensor) -> t.Tensor:
+        """f: [batch, dict_size] -> [batch, activation_dim]."""
+        return t.einsum('dh,bh->bd', self.F_dec, f)
+
+    def _encode_window(self, Xp: t.Tensor):
+        Zp = t.einsum('hd,bdt->bht', self.F_enc.T, Xp)
+        recons_Xp = t.einsum('dh,bht->bdt', self.F_dec.T, Zp)
+        loss_mse_Xt = t.nn.functional.mse_loss(recons_Xp[:, :, -1], Xp[:, :, -1])
+        return Zp, loss_mse_Xt
+
+    def _temporal_contribution(self, Zp, w, device, dtype):
+        B = Zp.shape[0]
+        if not self._uses_temporal():
+            return (t.zeros(B, self.dict_size, device=device, dtype=dtype),
+                    t.zeros((), device=device, dtype=dtype))
+        Zt_temp = t.zeros(B, self.dict_size, device=device, dtype=dtype)
+        loss_sparse_Bs = t.zeros((), device=device, dtype=dtype)
+        for lag in range(1, self.tau + 1):
+            B_lag = self.Bs[lag - 1]
+            loss_sparse_Bs = loss_sparse_Bs + t.nn.functional.l1_loss(B_lag, t.zeros_like(B_lag))
+            Zt_temp = Zt_temp + w * t.einsum('hd,bd->bh', B_lag, Zp[:, :, self.tau - lag])
+        return Zt_temp, loss_sparse_Bs
+
+    def _instantaneous_contribution(self, Zp, w, device, dtype):
+        if not self._uses_instantaneous():
+            B = Zp.shape[0]
+            return (t.zeros(B, self.dict_size, device=device, dtype=dtype),
+                    t.zeros((), device=device, dtype=dtype))
+        M_used = t.tril(self.M, diagonal=1)
+        Zt_inst = w * t.einsum('hd,bd->bh', M_used, Zp[:, :, self.tau])
+        loss_sparse_M = t.nn.functional.l1_loss(M_used, t.zeros_like(M_used))
+        return Zt_inst, loss_sparse_M
+
+    def _apply_topk(self, Zt, topk):
+        if topk <= 0:
+            return Zt
+        _, topk_indices = t.topk(t.abs(Zt), topk, dim=1)
+        mask = t.zeros_like(Zt)
+        mask.scatter_(1, topk_indices, 1.0)
+        return Zt * mask
+
+    def _independence_loss(self, Et):
+        if self.noise_mode == 'gau':
+            return t.trace(t.cov(Et))
+        elif self.noise_mode == 'lap':
+            return t.nn.functional.l1_loss(Et, t.zeros_like(Et))
+        raise NotImplementedError(f"noise_mode={self.noise_mode!r} not supported.")
+
+    def forward(self, Xp: t.Tensor):
+        """
+        Xp: [batch, activation_dim, tau+1]
+        Returns: (loss_mse_Xt, loss_mse_Zt, loss_indep,
+                  loss_sparse_Bs, loss_sparse_M, loss_sparse_Zt)
+        """
+        device, dtype = Xp.device, Xp.dtype
+        topk = self.topk_sparsity if self.training else 0
+
+        Zp, loss_mse_Xt = self._encode_window(Xp)
+        Zt_temp, loss_sparse_Bs = self._temporal_contribution(Zp, 1.0, device, dtype)
+        Zt_inst, loss_sparse_M  = self._instantaneous_contribution(Zp, 1.0, device, dtype)
+
+        Zt = self._apply_topk(Zt_temp + Zt_inst, topk)
+
+        loss_mse_Zt  = t.nn.functional.mse_loss(Zt, Zp[:, :, self.tau])
+        Et           = Zp[:, :, self.tau] - Zt
+        loss_indep   = self._independence_loss(Et)
+        loss_sparse_Zt = t.nn.functional.l1_loss(Zt, t.zeros_like(Zt))
+
+        return (loss_mse_Xt, loss_mse_Zt, loss_indep,
+                loss_sparse_Bs, loss_sparse_M, loss_sparse_Zt)
+
+    @classmethod
+    def from_pretrained(cls, path: str, device=None, **kwargs) -> "LinearIDOL":
+        """
+        Load from a state dict file. activation_dim, dict_size, tau are inferred
+        from the weights; pass w/noise_mode/topk_sparsity/mode as kwargs.
+        """
+        state_dict = t.load(path, map_location='cpu')
+        activation_dim, dict_size = state_dict['F_enc'].shape
+        tau = sum(1 for k in state_dict if k.startswith('Bs.'))
+        model = cls(activation_dim=activation_dim, dict_size=dict_size, tau=tau, **kwargs)
+        model.load_state_dict(state_dict)
+        if device is not None:
+            model.to(device)
+        return model
