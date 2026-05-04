@@ -253,7 +253,8 @@ class HeadActivationBuffer:
 
             # return a batch
             unreads = (~self.read).nonzero().squeeze()
-            idxs = unreads[t.randperm(len(unreads), device=unreads.device)[:self.out_batch_size]]
+            # idxs = unreads[t.randperm(len(unreads), device=unreads.device)[:self.out_batch_size]]
+            idxs = unreads[:self.out_batch_size]
             self.read[idxs] = True
             return self.activations[idxs]
     
