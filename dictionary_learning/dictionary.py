@@ -463,7 +463,7 @@ class LinearIDOL(Dictionary, nn.Module):
         tau: int = 20,
         w: float = 0.5,
         noise_mode: str = 'lap',
-        topk_sparsity: int = 0,
+        topk_sparsity: int = 100,
         mode: str = 'both',
     ):
         super().__init__()

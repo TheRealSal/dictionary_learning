@@ -49,7 +49,7 @@ class LinearIDOLTrainer(SAETrainer):
         tau: int = 20,
         w: float = 0.5,
         noise_mode: str = 'lap',
-        topk_sparsity: int = 0,
+        topk_sparsity: int = 100,
         mode: str = 'both',
         lr: float = 1e-2,
         wd: float = 1e-4,
