@@ -495,6 +495,9 @@ class LinearIDOL(Dictionary, nn.Module):
 
         self._init_params()
 
+    def scale_biases(self, scale: float):
+        pass  # IDOL has no bias terms that require activation-scale normalization
+
     def _uses_temporal(self) -> bool:
         return self.mode in ('temporal', 'both')
 
