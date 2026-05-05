@@ -109,7 +109,6 @@ def main():
             'l_spB':          args.l_spB,
             'l_spM':          args.l_spM,
             'l_spZ':          args.l_spZ,
-            'use_amp':        False,   # trainSAE handles autocast via autocast_dtype
             'seed':           args.seed,
             'device':         device,
             'wandb_name':     args.run_name,
