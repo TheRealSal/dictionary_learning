@@ -568,6 +568,7 @@ class LinearIDOL(Dictionary, nn.Module):
         Returns: (loss_mse_Xt, loss_mse_Zt, loss_indep,
                   loss_sparse_Bs, loss_sparse_M, loss_sparse_Zt)
         """
+        Xp = Xp.to(self.F_enc.dtype)
         device, dtype = Xp.device, Xp.dtype
         topk = self.topk_sparsity if self.training else 0
 
