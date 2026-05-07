@@ -6,6 +6,7 @@ from .top_k import TopKTrainer
 from .jumprelu import JumpReluTrainer
 from .batch_top_k import BatchTopKTrainer, BatchTopKSAE
 from .idol import LinearIDOLTrainer
+from .matryoshka_batch_top_k import MatryoshkaBatchTopKSAE, MatryoshkaBatchTopKTrainer
 
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "BatchTopKTrainer",
     "BatchTopKSAE",
     "LinearIDOLTrainer",
+    "MatryoshkaBatchTopKTrainer"
 ]
