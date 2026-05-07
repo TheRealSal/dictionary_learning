@@ -99,6 +99,13 @@ class LinearIDOLTrainer(SAETrainer):
             mode=mode,
         ).to(self.device)
 
+        if lr is not None:
+            self.lr = lr
+        else:
+            # Auto-select LR using 1 / sqrt(d) scaling law from Figure 3 of the paper
+            scale = dict_size / (2**14)
+            self.lr = 2e-4 / scale**0.5
+
         self.optimizer = t.optim.Adam(self.ae.parameters(), lr=lr, weight_decay=wd)
         lr_fn = get_lr_schedule(steps, warmup_steps, decay_start)
         self.scheduler = t.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lr_fn)
