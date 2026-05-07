@@ -479,14 +479,15 @@ class LinearIDOL(Dictionary, nn.Module):
         self.topk_sparsity = topk_sparsity
         self.mode = mode
 
+        self.register_buffer('_tau', t.tensor(tau, dtype=t.long))
+
         self.F_enc = nn.Parameter(t.ones(activation_dim, dict_size), requires_grad=True)
         self.F_dec = nn.Parameter(t.ones(dict_size, activation_dim), requires_grad=True)
 
-        # Always allocated for state-dict compatibility; gradient disabled when unused.
         self.Bs = nn.ParameterList([
-            nn.Parameter(t.zeros(dict_size, dict_size), requires_grad=self._uses_temporal())
+            nn.Parameter(t.zeros(dict_size, dict_size), requires_grad=True)
             for _ in range(tau)
-        ])
+        ] if self._uses_temporal() else [])
 
         self.M = nn.Parameter(
             t.ones(dict_size, dict_size),
@@ -594,7 +595,11 @@ class LinearIDOL(Dictionary, nn.Module):
         """
         state_dict = t.load(path, map_location='cpu')
         activation_dim, dict_size = state_dict['F_enc'].shape
-        tau = sum(1 for k in state_dict if k.startswith('Bs.'))
+        # '_tau' buffer is authoritative; fall back to counting Bs keys for old checkpoints
+        if '_tau' in state_dict:
+            tau = state_dict['_tau'].item()
+        else:
+            tau = sum(1 for k in state_dict if k.startswith('Bs.'))
         model = cls(activation_dim=activation_dim, dict_size=dict_size, tau=tau, **kwargs)
         model.load_state_dict(state_dict)
         if device is not None:
