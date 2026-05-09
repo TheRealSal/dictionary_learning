@@ -512,12 +512,20 @@ class LinearIDOL(Dictionary, nn.Module):
             init.xavier_normal_(self.M.data)
 
     def encode(self, x: t.Tensor) -> t.Tensor:
-        """x: [batch, activation_dim] -> [batch, dict_size]."""
-        return t.einsum('hd,bd->bh', self.F_enc, x)
+        """x: [batch, activation_dim] -> [batch, dict_size].
+        Returns the instantaneous-SCM representation Zt = (x @ F_enc) @ M_used^T.
+        """
+        x = x.to(self.F_enc.dtype)
+        Zp = x @ self.F_enc                          # [batch, dict_size]
+        if self._uses_instantaneous():
+            M_used = t.tril(self.M, diagonal=1)      # match training; switch to -1 after retrain
+            return Zp @ M_used.T                     # [batch, dict_size]
+        return Zp
 
     def decode(self, f: t.Tensor) -> t.Tensor:
         """f: [batch, dict_size] -> [batch, activation_dim]."""
-        return t.einsum('dh,bh->bd', self.F_dec, f)
+        f = f.to(self.F_dec.dtype)
+        return f @ self.F_dec
 
     def _encode_window(self, Xp: t.Tensor):
         Zp = t.einsum('hd,bdt->bht', self.F_enc.T, Xp)
@@ -586,6 +594,40 @@ class LinearIDOL(Dictionary, nn.Module):
 
         return (loss_mse_Xt, loss_mse_Zt, loss_indep,
                 loss_sparse_Bs, loss_sparse_M, loss_sparse_Zt)
+    
+    # def forward(self, Xp: t.Tensor):
+    #     Xp = Xp.to(self.F_enc.dtype)
+    #     device, dtype = Xp.device, Xp.dtype
+    #     topk = self.topk_sparsity if self.training else 0
+
+    #     if self.mode == 'instantaneous':
+    #         # Only the last timestep matters; skip the windowed encode entirely.
+    #         Xt = Xp[:, :, -1]                             # (b, d)
+    #         Zt_p = Xt @ self.F_enc                        # (b, h)  -- F_enc is (d, h)
+    #         Xt_hat = Zt_p @ self.F_dec                    # (b, d)  -- F_dec is (h, d)
+    #         loss_mse_Xt = t.nn.functional.mse_loss(Xt_hat, Xt)
+    #         Zt_temp = t.zeros_like(Zt_p)
+    #         loss_sparse_Bs = t.zeros((), device=device, dtype=dtype)
+    #         Zt_inst, loss_sparse_M = self._instantaneous_contribution_fast(Zt_p)
+    #     else:
+    #         Zp, loss_mse_Xt = self._encode_window(Xp)
+    #         Zt_temp, loss_sparse_Bs = self._temporal_contribution(Zp, 1.0, device, dtype)
+    #         Zt_inst, loss_sparse_M = self._instantaneous_contribution(Zp, 1.0, device, dtype)
+    #         Zt_p = Zp[:, :, self.tau]
+
+    #     Zt = self._apply_topk(Zt_temp + Zt_inst, topk)
+    #     loss_mse_Zt = t.nn.functional.mse_loss(Zt, Zt_p)
+    #     Et = Zt_p - Zt
+    #     loss_indep = self._independence_loss(Et)
+    #     loss_sparse_Zt = Zt.abs().mean()
+
+    #     return (loss_mse_Xt, loss_mse_Zt, loss_indep,
+    #             loss_sparse_Bs, loss_sparse_M, loss_sparse_Zt)
+
+    # def _instantaneous_contribution_fast(self, Zt_p):
+    #     M_used = self.M.tril(diagonal=1)
+    #     Zt_inst = t.einsum('hd,bd->bh', M_used, Zt_p)   # w=1.0 inlined
+    #     return Zt_inst, M_used.abs().mean()
 
     @classmethod
     def from_pretrained(cls, path: str, device=None, **kwargs) -> "LinearIDOL":
